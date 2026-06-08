@@ -1,15 +1,17 @@
-# Contribution [#]: [Issue Title]
+# Contribution 1: Implementing ZipStore's __delitem__ via overwrite
 
-**Contribution Number:** [1 / 2 / 3]  
-**Student:** [Your Name]  
-**Issue:** [GitHub issue link]  
-**Status:** [Phase I / Phase II / Phase III / Phase IV] [In Progress / Complete]
+**Contribution Number:** 1  
+**Student:** Mohammad Zuher Jaser Asad  
+**Issue:** https://github.com/zarr-developers/zarr-python/issues/828  
+**Status:** Phase I In Progress
 
 ---
 
 ## Why I Chose This Issue
 
-[1-2 paragraphs explaining why this issue interests you, how it matches your skills/learning goals, what you hope to learn]
+I chose this issue because it is a well-scoped, concrete Python problem that directly touches core data storage logic in zarr-python — a library widely used in scientific computing and AI/ML data pipelines. The fix involves implementing a soft-delete mechanism for ZipStore by overwriting entries with an empty byte string (`b""`) and updating related methods (`__contains__`, `__getitem__`, `keylist()`) to treat those entries as deleted. This matches my Python skills and gives me a clear path to making a real contribution.
+
+I also chose it because two previous contributors attempted it (PRs #1184 and #2838) but both were closed as stale, meaning the issue is still open and the prior work serves as a detailed technical roadmap. The maintainer specifically noted that the v3 ZipStore implementation needs the same fix, which gives me a fresh angle to contribute that hasn't been addressed before.
 
 ---
 
