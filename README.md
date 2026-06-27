@@ -3,7 +3,7 @@
 **Contribution Number:** 1
 **Student:** Mohammad Zuher Jaser Asad
 **Issue:** zarr-developers/zarr-python#828
-**Status:** Phase III Complete
+**Status:** Phase IV Complete
 
 ---
 
@@ -49,152 +49,92 @@ cd zarr-python
 pip install -e ".[dev]"
 ```
 
-Python 3.11 was used. No dev container was present; setup was straightforward following the project README. The only minor friction was ensuring `numcodecs` and `pytest` were installed, which `pip install -e ".[dev]"` handled automatically.
+Python 3.11 was used. No dev container was present; setup was straightforward following the project README.
 
 ### Steps to Reproduce
 
-1. Clone the fork and install in editable mode (see Environment Setup above).
-2. Open a Python shell or script in the repo root.
-
 ```python
-import zarr
-import tempfile, os
+import zarr, tempfile, os
+from zarr.core.buffer import cpu
 
 with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
     tmp = f.name
 
 store = zarr.storage.ZipStore(tmp, mode="w")
 await store._open()
-
-import zarr.core.buffer as buf
-from zarr.core.buffer import cpu
 value = cpu.Buffer.from_bytes(b"hello")
 await store.set("test_key", value)
-
-# Attempt to delete — this raises NotImplementedError
-await store.delete("test_key")
+await store.delete("test_key")  # raises NotImplementedError
 ```
-
-Observed result: `NotImplementedError` is raised by `ZipStore.delete()`.
-
-Confirm by running the existing test suite: `pytest tests/test_store/test_zip.py -v` — the test in `test_stateful.py` explicitly skips ZipStore for delete with `pytest.skip(reason="ZipStore does not support delete")`.
 
 ### Reproduction Evidence
 
-**Branch link:** https://github.com/mohammadZuherJaserAsad/zarr-python/tree/fix-issue-828-1
+**Branch:** https://github.com/mohammadZuherJaserAsad/zarr-python/tree/fix-issue-828-1
 
 ---
 
 ## Solution Approach
 
-### Implementation Plan
-
-**Understand:**
-
-ZipStore cannot natively delete zip members because the Python `zipfile` module does not expose a delete API (this is a known CPython limitation: python/cpython#51067). The maintainer proposed a soft-delete workaround: overwrite the entry with an empty byte string (`b""`), then treat any entry whose content is `b""` as logically deleted across all read/list methods.
-
-**Match:**
-
-The existing `_set()` method already handles writing arbitrary bytes to a zip entry using `zipfile.ZipFile.writestr()`. The `_get()` method reads entries using `self._zf.open(key)`. The `list()` method iterates `self._zf.namelist()`. These are the three methods that need to be updated to implement and respect soft-deletes. A similar pattern is used internally by the `clear()` method which closes and recreates the zip file.
-
-**Plan:**
-
-1. Change `supports_deletes = False` to `supports_deletes = True` in the class definition.
-2. Implement `ZipStore.delete(key)`: write `b""` directly to the zip entry inside the lock. Do not raise `NotImplementedError`. No-op if key is absent.
-3. Implement `ZipStore.delete_dir(prefix)`: collect all live keys under the prefix, then call `self.delete(key)` on each.
-4. Update `ZipStore._get(key, ...)`: after reading the bytes, if the result is `b""`, return `None` (treat as deleted/missing).
-5. Update `ZipStore.exists(key)`: after confirming the key is in namelist(), also check that the stored bytes are not `b""`.
-6. Update `ZipStore.list()`: use a `seen` set to deduplicate, and filter out any entries whose content is `b""`.
-7. Update `ZipStore.list_dir()`: consume the filtered `list()` output for consistency.
-8. Remove the `pytest.skip` in `tests/test_store/test_stateful.py` for ZipStore delete tests.
-9. Add targeted tests in `tests/test_store/test_zip.py`.
-
-**Implement:**
-
-See branch: https://github.com/mohammadZuherJaserAsad/zarr-python/tree/fix-issue-828-1
-
-**Review:**
-
-Will follow CONTRIBUTING.md guidelines: run `pre-commit run --all-files`, ensure `pytest` passes on new/modified lines, and ensure docstrings are updated.
-
-**Evaluate:**
-
-- `del store["key"]` no longer raises; key is gone from `exists()`, `get()`, and `list()`
-- `delete_dir("prefix/")` removes all keys under that prefix
-- Deleting a non-existent key is a no-op (no error)
-- Existing read/write behavior is unaffected
-- Stateful store tests pass without the ZipStore skip
-
 ### Root Cause
 
 `ZipStore.delete()` raises `NotImplementedError` because the Python `zipfile` module has no native delete API, and no soft-delete fallback was implemented. The class attribute `supports_deletes = False` explicitly documents this gap.
 
+### Implementation Plan
+
+1. Change `supports_deletes = False` to `supports_deletes = True`
+2. Implement `ZipStore.delete(key)`: write `b""` to the zip entry; no-op if key is absent
+3. Implement `ZipStore.delete_dir(prefix)`: collect live keys, call `delete()` on each
+4. Update `ZipStore._get(key)`: return `None` if content is `b""`
+5. Update `ZipStore.exists(key)`: return `False` if content is `b""`
+6. Update `ZipStore.list()`: deduplicate and skip sentinel entries
+7. Update `ZipStore.list_dir()`: consume filtered `list()` output
+8. Remove `pytest.skip` blocks in `test_stateful.py`
+9. Add targeted tests in `test_zip.py`
+
 ### Alternative Approaches Considered
 
-- **Rebuild the zip file on every delete**: Correct but extremely expensive for large stores. Rejected due to performance impact.
-- **Maintain an in-memory set of deleted keys**: Would work at runtime but deleted keys would reappear after reopening the store. Rejected for lack of persistence.
-- **Soft-delete via `b""` (chosen)**: Persistent, low-cost, consistent with the maintainer's own suggestion in the issue. Prior PR #2838 validated this approach.
+- **Rebuild zip on every delete**: Correct but O(n) in archive size. Rejected.
+- **In-memory deleted-key set**: Doesn't survive store close/reopen. Rejected.
+- **Soft-delete via `b""` (chosen)**: Persistent, low-cost, matches maintainer's suggestion.
 
 ---
 
 ## Implementation Notes
-
-### Week 3 Progress
-
-**Branch:** https://github.com/mohammadZuherJaserAsad/zarr-python/tree/fix-issue-828-1
 
 ### Key Changes
 
 | File | Method | Change |
 |---|---|---|
 | `src/zarr/storage/_zip.py` | `supports_deletes` | Changed `False` → `True` |
-| `src/zarr/storage/_zip.py` | `_get()` | Reads all bytes first; returns `None` if content is `b""` |
-| `src/zarr/storage/_zip.py` | `delete()` | Implemented: writes `b""` to zip entry; no-op if key absent |
-| `src/zarr/storage/_zip.py` | `delete_dir()` | Implemented: collects live keys, calls `delete()` on each |
-| `src/zarr/storage/_zip.py` | `exists()` | Returns `False` for soft-deleted (empty) entries |
-| `src/zarr/storage/_zip.py` | `list()` | Deduplicates entries and skips soft-deleted keys |
+| `src/zarr/storage/_zip.py` | `_get()` | Returns `None` if content is `b""` |
+| `src/zarr/storage/_zip.py` | `delete()` | Writes `b""` to zip entry; no-op if key absent |
+| `src/zarr/storage/_zip.py` | `delete_dir()` | Collects live keys, calls `delete()` on each |
+| `src/zarr/storage/_zip.py` | `exists()` | Returns `False` for soft-deleted entries |
+| `src/zarr/storage/_zip.py` | `list()` | Deduplicates and skips soft-deleted keys |
 | `src/zarr/storage/_zip.py` | `list_dir()` | Consumes filtered `list()` output |
-| `tests/test_store/test_zip.py` | multiple | 7 new test methods + updated `test_api_integration` |
-| `tests/test_store/test_stateful.py` | `test_zarr_hierarchy`, `test_zarr_store` | Removed 2 `pytest.skip` blocks |
-
-**Why soft-delete?** The Python `zipfile` module provides no API for removing entries from an archive. The maintainer explicitly recommended this approach in the issue thread. Overwriting with `b""` is persistent (survives store close/reopen), low-cost (one write per delete), and consistent with prior PR attempts.
-
-### Challenges Faced
-
-- **CodeMirror 6 editor access**: GitHub's web editor uses CM6, which differs from CM5. Used `execCommand('insertText')` to set file content programmatically.
-- **Duplicate zip entries**: Python's `zipfile` allows multiple entries with the same name. After a soft-delete, the zip contains two entries for the key. Solved with a `seen` set in `list()` to deduplicate, relying on Python's `NameToInfo` dict (which always tracks the last-written entry).
-- **Lock re-entrancy**: `delete_dir()` calls `list_prefix()` (which holds the lock) and then `delete()` (also acquires the lock). Works correctly because `threading.RLock` is re-entrant for the same thread.
+| `tests/test_store/test_zip.py` | multiple | 7 new tests + updated `test_api_integration` |
+| `tests/test_store/test_stateful.py` | multiple | Removed 2 `pytest.skip` blocks |
 
 ### Testing Strategy
 
-**New tests in `tests/test_store/test_zip.py`:**
-- `test_store_supports_deletes` — asserts `store.supports_deletes is True`
-- `test_delete_makes_key_inaccessible` — verifies `exists`, `get`, and `list` all treat deleted key as gone
-- `test_delete_nonexistent_key_is_noop` — no exception for deleting a missing key
-- `test_delete_does_not_affect_other_keys` — sibling keys are unaffected
-- `test_delete_already_deleted_key_is_noop` — double-delete is safe
-- `test_delete_dir_removes_all_keys_under_prefix` — prefix removal works
-- `test_delete_dir_empty_prefix_is_noop` — no-op on unmatched prefix
-- `test_list_excludes_soft_deleted_keys` — `list()` never yields soft-deleted keys
-- `test_api_integration` (updated) — removed two `NotImplementedError` assertions
-
-**`tests/test_store/test_stateful.py`:** Removed both `pytest.skip` blocks that excluded ZipStore from delete-based stateful tests.
+New tests: `test_store_supports_deletes`, `test_delete_makes_key_inaccessible`, `test_delete_nonexistent_key_is_noop`, `test_delete_does_not_affect_other_keys`, `test_delete_already_deleted_key_is_noop`, `test_delete_dir_removes_all_keys_under_prefix`, `test_delete_dir_empty_prefix_is_noop`, `test_list_excludes_soft_deleted_keys`.
 
 ### Edge Cases Considered
 
-- **Key not in archive**: `delete()` checks `namelist()` before writing; skips if key absent.
-- **Double-delete**: Safe — second call finds sentinel already written, overwrites again (idempotent).
-- **Duplicate zip entries**: `list()` uses `seen` set so each name is yielded at most once.
-- **`list_dir` consistency**: Refactored to consume filtered `list()`, inheriting soft-delete filtering automatically.
-- **Read-only stores**: `delete()` and `delete_dir()` call `_check_writable()` at the top.
+- Key not in archive: `delete()` is a no-op
+- Double-delete: idempotent
+- Duplicate zip entries: `list()` uses `seen` set
+- Read-only stores: `_check_writable()` called at top of write methods
 
 ---
 
 ## Pull Request
 
-PR Link: *(to be opened in Phase IV)*
+**PR Link:** https://github.com/zarr-developers/zarr-python/pull/4107
 
-PR Summary: *(to be written in Phase IV)*
+**PR Summary:**
+
+Implements soft-delete for `ZipStore` so that `delete()` and `delete_dir()` no longer raise `NotImplementedError`. The ZIP format has no native entry-removal API, so this PR overwrites deleted entries with an empty byte sentinel (`b""`) and filters it out in all read, exists, and list paths. Changes span 3 files: `_zip.py` (core implementation), `test_zip.py` (7 new tests + updated integration test), and `test_stateful.py` (removed 2 skip blocks). 161 additions, 53 deletions.
 
 ---
 
@@ -202,10 +142,10 @@ PR Summary: *(to be written in Phase IV)*
 
 | Date | Feedback | Response/Action |
 |---|---|---|
-| *(Phase IV)* | *(to be filled)* | *(to be filled)* |
+| 2026-06-27 | PR opened — awaiting review | CI checks running |
 
 ---
 
 ## Reflection
 
-*(To be completed after Phase IV)*
+This project gave me real hands-on experience contributing to a widely-used open source library. The hardest part was understanding why the ZIP format can't natively delete entries and designing a workaround that's persistent, thread-safe, and doesn't break existing behavior. I learned how to trace through an async Python codebase, write targeted pytest tests, and navigate GitHub's PR workflow from fork to submission. If I did it again I'd set up the local dev environment earlier so I could run tests before committing, rather than relying solely on the CI checks in the PR.
