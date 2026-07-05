@@ -3,7 +3,7 @@
 **Contribution Number:** 1
 **Student:** Mohammad Zuher Jaser Asad
 **Issue:** zarr-developers/zarr-python#828
-**Status:** Phase IV Complete
+**Status:** Phase IV Complete — PR open, addressing CI failures ahead of review
 
 ---
 
@@ -143,6 +143,7 @@ Implements soft-delete for `ZipStore` so that `delete()` and `delete_dir()` no l
 | Date | Feedback | Response/Action |
 |---|---|---|
 | 2026-06-27 | PR opened — awaiting review | CI checks running |
+| 2026-07-05 | CI now failing: Lint flagged an unused import (F401 in test_stateful.py) and a ruff-format diff in _zip.py. Slow Hypothesis CI found a real bug: repeated writestr() calls to the same zip entry name raise a UserWarning (Duplicate name), and a stateful property test caught a key-count mismatch after delete. Contributor d-v-b tagged maintainer mkitti for review; no review comments yet. | Plan to run prek run --all-files locally to fix the lint issues, then investigate why list()'s dedup doesn't prevent the duplicate-name warning on repeated writes/deletes before pushing a follow-up commit. |
 
 ---
 
