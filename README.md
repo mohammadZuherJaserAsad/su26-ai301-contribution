@@ -3,7 +3,7 @@
 **Contribution Number:** 1
 **Student:** Mohammad Zuher Jaser Asad
 **Issue:** zarr-developers/zarr-python#828
-**Status:** Phase IV Complete — PR open, redesigned soft-delete after Hypothesis found a second collision bug; latest commit awaiting CI
+**Status:** Phase IV — PR open, core CI (Slow Hypothesis) now passing after redesign; awaiting maintainer's full review
 
 ---
 
@@ -147,6 +147,7 @@ Implements soft-delete for `ZipStore` so that `delete()` and `delete_dir()` no l
 | 2026-06-27 | PR opened — awaiting review | CI checks running |
 | 2026-07-05 | CI now failing: Lint flagged an unused import (F401 in test_stateful.py) and a ruff-format diff in _zip.py. Slow Hypothesis CI found a real bug: repeated writestr() calls to the same zip entry name raise a UserWarning (Duplicate name), and a stateful property test caught a key-count mismatch after delete. Contributor d-v-b tagged maintainer mkitti for review; no review comments yet. | Fixed lint issues, changed the soft-delete sentinel from `b""` to a long "unique" byte string, and suppressed the expected duplicate-name warning inside `delete()`. Pushed as commits 4db600c / 2b784fe. |
 | 2026-07-09 | Slow Hypothesis CI failed again on the pushed fix — this time on `test_zarr_store[zip]`, with Hypothesis reporting a falsifying example that set a key's value to the *exact* sentinel bytes I had just introduced, reproducing the same class of bug against the new constant. Still no maintainer review comments; PR remains unreviewed. | Diagnosed this as a structural flaw, not a tuning problem: any fixed sentinel *value* can always collide with a legitimate value, no matter how "unique" it looks, because Zarr payload bytes are arbitrary. Redesigned `delete()` to flag entries via the `ZipInfo.comment` metadata field instead of entry content — metadata the store never exposes through `set()`/`get()`, so it cannot collide with caller data by construction. Verified the fix locally with a standalone `zipfile` reproduction script before pushing as commit 81af773; CI re-running now. |
+| 2026-07-20 | Slow Hypothesis CI now passes on the ZipInfo.comment redesign -- the collision bug from the last two attempts is resolved. Maintainer mkitti left a first comment ("Soft delete is the best we can here I think. I have not looked closely at the implementation yet.") but has not yet done a full review. Three CI checks still fail on the minimal-deps matrix (py3.12-min_deps, py3.14 deps=minimal) -- the same test_array.py issue noted previously, unrelated to files this PR touches. Merge remains blocked pending a required review; branch is out-of-date with main but cleanly mergeable. | No code changes needed for the now-passing Hypothesis check. Continuing to treat the minimal-deps test_array.py failure as out of scope for this PR. Waiting on mkitti (or another maintainer) for a substantive review; will update branch from main if requested. |
 
 ---
 
